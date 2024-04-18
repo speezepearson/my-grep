@@ -35,6 +35,8 @@ enum Pattern {
         inverted: bool,
         ranges: Vec<(char, char)>,
     },
+    Beginning,
+    End,
 }
 impl Display for Pattern {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -94,6 +96,8 @@ impl Display for Pattern {
                 }
                 f.write_str("]")
             }
+            Self::Beginning => f.write_str("^"),
+            Self::End => f.write_str("$"),
         }
     }
 }
@@ -110,6 +114,7 @@ struct MatchState<'a> {
     positional_groups: Vec<&'a str>,
     named_groups: HashMap<String, &'a str>,
     remainder: &'a str,
+    is_beginning: bool,
 }
 impl Pattern {
     fn execute<'a>(&self, target: &'a str) -> Vec<MatchState<'a>> {
@@ -117,6 +122,7 @@ impl Pattern {
             positional_groups: vec![],
             named_groups: HashMap::new(),
             remainder: target,
+            is_beginning: true,
         })
     }
     fn step<'a>(&self, state: MatchState<'a>) -> Vec<MatchState<'a>> {
@@ -127,6 +133,7 @@ impl Pattern {
                         positional_groups: state.positional_groups.clone(),
                         named_groups: state.named_groups.clone(),
                         remainder: &state.remainder[s.len()..],
+                        is_beginning: state.is_beginning && s.is_empty(),
                     }]
                 } else {
                     vec![]
@@ -177,25 +184,20 @@ impl Pattern {
                     GroupCapturingness::NonCapturing => states,
                     GroupCapturingness::Positional => states
                         .into_iter()
-                        .map(|state| {
-                            MatchState {
-                                positional_groups: [
-                                    orig_state.positional_groups.clone(),
-                                    vec![
-                                        &orig_state.remainder
-                                            [..orig_state.remainder.len() - state.remainder.len()],
-                                    ],
-                                    state.positional_groups[orig_state.positional_groups.len()..]
-                                        .to_vec(),
-                                ]
-                                .concat(),
-                                ..state
-                            }
-                            // state.positional_groups.push(
-                            //     &orig_state.remainder
-                            //         [..orig_state.remainder.len() - state.remainder.len()],
-                            // );
-                            // state
+                        .map(|state| MatchState {
+                            positional_groups: [
+                                orig_state.positional_groups.clone(),
+                                vec![
+                                    &orig_state.remainder
+                                        [..orig_state.remainder.len() - state.remainder.len()],
+                                ],
+                                state.positional_groups[orig_state.positional_groups.len()..]
+                                    .to_vec(),
+                            ]
+                            .concat(),
+                            is_beginning: orig_state.is_beginning
+                                && orig_state.remainder == state.remainder,
+                            ..state
                         })
                         .collect(),
                     GroupCapturingness::Named(name) => states
@@ -218,6 +220,7 @@ impl Pattern {
                 } else {
                     vec![MatchState {
                         remainder: &state.remainder[1..],
+                        is_beginning: false,
                         ..state
                     }]
                 }
@@ -230,6 +233,7 @@ impl Pattern {
                         if state.remainder.starts_with(group) {
                             vec![MatchState {
                                 remainder: &state.remainder[group.len()..],
+                                is_beginning: state.is_beginning && group.is_empty(),
                                 ..state
                             }]
                         } else {
@@ -244,6 +248,7 @@ impl Pattern {
                     if state.remainder.starts_with(group) {
                         vec![MatchState {
                             remainder: &state.remainder[group.len()..],
+                            is_beginning: state.is_beginning && group.is_empty(),
                             ..state
                         }]
                     } else {
@@ -265,11 +270,26 @@ impl Pattern {
                         {
                             vec![MatchState {
                                 remainder: chars.as_str(),
+                                is_beginning: false,
                                 ..state
                             }]
                         }
                         Some(_) => vec![],
                     }
+                }
+            }
+            Pattern::Beginning => {
+                if state.is_beginning {
+                    vec![state]
+                } else {
+                    vec![]
+                }
+            }
+            Pattern::End => {
+                if state.remainder.is_empty() {
+                    vec![state]
+                } else {
+                    vec![]
                 }
             }
         }
@@ -290,6 +310,7 @@ mod tests {
                 positional_groups: vec![],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             }]
         );
     }
@@ -304,6 +325,7 @@ mod tests {
                 positional_groups: vec![],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             }]
         );
     }
@@ -318,6 +340,7 @@ mod tests {
                 positional_groups: vec!["a"],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
     }
@@ -332,6 +355,7 @@ mod tests {
                 positional_groups: vec![],
                 named_groups: [("foo".to_string(), "a")].iter().cloned().collect(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
     }
@@ -348,11 +372,13 @@ mod tests {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "a",
+                    is_beginning: true,
                 },
             ]
         );
@@ -371,21 +397,25 @@ mod tests {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "a",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "aa",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec![],
                     named_groups: HashMap::new(),
                     remainder: "aaa",
+                    is_beginning: true,
                 },
             ]
         );
@@ -404,21 +434,25 @@ mod tests {
                     positional_groups: vec!["bbb"],
                     named_groups: HashMap::new(),
                     remainder: "",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec!["bb"],
                     named_groups: HashMap::new(),
                     remainder: "b",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec!["b"],
                     named_groups: HashMap::new(),
                     remainder: "bb",
+                    is_beginning: false,
                 },
                 MatchState {
                     positional_groups: vec![""],
                     named_groups: HashMap::new(),
                     remainder: "bbb",
+                    is_beginning: false,
                 },
             ]
         );
@@ -450,6 +484,7 @@ mod tests {
                 positional_groups: vec!["bbb"],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
     }
@@ -464,6 +499,7 @@ mod tests {
                 positional_groups: vec!["bb"],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
 
@@ -481,6 +517,7 @@ mod tests {
                 positional_groups: vec![],
                 named_groups: [("glorp".to_string(), "bb")].iter().cloned().collect(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
 
@@ -498,6 +535,7 @@ mod tests {
                 positional_groups: vec!["b"],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
 
@@ -515,11 +553,66 @@ mod tests {
                 positional_groups: vec!["abcd", "bc", "b", "c"],
                 named_groups: HashMap::new(),
                 remainder: "",
+                is_beginning: false,
             },]
         );
 
         let states = pat.execute("abbbc");
         assert_eq!(states, vec![]);
+    }
+
+    #[test]
+    fn test_beginning() {
+        let pat: Pattern = "^a".parse().unwrap();
+        let states = pat.execute("a");
+        assert_eq!(
+            states,
+            vec![MatchState {
+                positional_groups: vec![],
+                named_groups: HashMap::new(),
+                remainder: "",
+                is_beginning: false,
+            }]
+        );
+
+        let states = pat.execute("ba");
+        assert_eq!(states, vec![]);
+    }
+
+    #[test]
+    fn test_end() {
+        let pat: Pattern = "a?".parse().unwrap();
+        let mut states = pat.execute("a");
+        states.sort_by(|a, b| a.remainder.len().cmp(&b.remainder.len()));
+        assert_eq!(
+            states,
+            vec![
+                MatchState {
+                    positional_groups: vec![],
+                    named_groups: HashMap::new(),
+                    remainder: "",
+                    is_beginning: false,
+                },
+                MatchState {
+                    positional_groups: vec![],
+                    named_groups: HashMap::new(),
+                    remainder: "a",
+                    is_beginning: true,
+                },
+            ]
+        );
+
+        let pat: Pattern = "a?$".parse().unwrap();
+        let states = pat.execute("a");
+        assert_eq!(
+            states,
+            vec![MatchState {
+                positional_groups: vec![],
+                named_groups: HashMap::new(),
+                remainder: "",
+                is_beginning: false,
+            }]
+        );
     }
 
     // #[test]
@@ -712,6 +805,8 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
             named_backref,
             range,
             group,
+            just('^').to(Pattern::Beginning),
+            just('$').to(Pattern::End),
         ));
         let repeat = atom
             .clone()
