@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     io::{BufRead as _, Write as _},
     str::FromStr,
 };
@@ -34,64 +35,63 @@ enum Pattern {
         ranges: Vec<(char, char)>,
     },
 }
-impl ToString for Pattern {
-    fn to_string(&self) -> String {
+impl Display for Pattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Exact(c) => c.clone(),
-            Self::Repeat { pat, min, max } => match (min, max) {
-                (0, None) => format!("{}*", pat.to_string()),
-                (1, None) => format!("{}+", pat.to_string()),
-                (min, None) => format!("{}{{{},}}", pat.to_string(), min),
-                (0, Some(1)) => format!("{}?", pat.to_string()),
-                (min, Some(max)) => {
-                    format!(
-                        "{}{{{},{}}}",
-                        pat.to_string(),
-                        if *min == 0 {
-                            "".to_string()
-                        } else {
-                            min.to_string()
-                        },
-                        max
-                    )
+            Self::Exact(c) => f.write_str(c),
+            Self::Repeat { pat, min, max } => {
+                pat.fmt(f)?;
+                match (min, max) {
+                    (0, None) => f.write_str("*"),
+                    (1, None) => f.write_str("+"),
+                    (0, Some(1)) => f.write_str("?"),
+                    (min, None) => f.write_fmt(format_args!("{{{},}}", min)),
+                    (0, Some(max)) => f.write_fmt(format_args!("{{,{}}}", max)),
+                    (min, Some(max)) if min == max => f.write_fmt(format_args!("{{{}}}", min)),
+                    (min, Some(max)) => f.write_fmt(format_args!("{{{},{}}}", min, max)),
                 }
-            },
-            Self::Concat(pats) => pats.iter().map(Self::to_string).collect(),
-            Self::Group { pat, capture } => format!(
-                "({}{})",
+            }
+            Self::Concat(pats) => {
+                for pat in pats {
+                    pat.fmt(f)?;
+                }
+                Ok(())
+            }
+            Self::Group { pat, capture } => {
+                f.write_str("(")?;
                 match capture {
-                    GroupCapturingness::NonCapturing => "?:".to_string(),
-                    GroupCapturingness::Positional => "".to_string(),
-                    GroupCapturingness::Named(name) => format!("?P<{}>", name),
-                },
-                pat.to_string()
-            ),
-            Self::Or(pats) => format!(
-                "({})",
-                pats.iter()
-                    .map(Self::to_string)
-                    .collect::<Vec<_>>()
-                    .join("|")
-            ),
-            Self::Dot => ".".to_string(),
-            Self::PositionalBackreference(n) => format!("\\{}", n),
-            Self::NamedBackreference(name) => format!("\\g<{}>", name),
+                    GroupCapturingness::NonCapturing => f.write_str("?:")?,
+                    GroupCapturingness::Positional => {}
+                    GroupCapturingness::Named(name) => f.write_fmt(format_args!("?P<{}>", name))?,
+                }
+                f.write_fmt(format_args!("{}", pat.to_string()))?;
+                f.write_str(")")
+            }
+            Self::Or(pats) => {
+                for (i, pat) in pats.iter().enumerate() {
+                    if i != 0 {
+                        f.write_str("|")?;
+                    }
+                    pat.fmt(f)?;
+                }
+                Ok(())
+            }
+            Self::Dot => f.write_str("."),
+            Self::PositionalBackreference(n) => f.write_fmt(format_args!("\\{}", n)),
+            Self::NamedBackreference(name) => f.write_fmt(format_args!("\\g<{}>", name)),
             Self::Ranges { inverted, ranges } => {
-                let mut s = "[".to_string();
+                f.write_str("[")?;
                 if *inverted {
-                    s.push('^');
+                    f.write_str("^")?;
                 }
                 for (start, end) in ranges {
                     if start == end {
-                        s.push(*start);
+                        f.write_fmt(format_args!("{}", start))?;
                     } else {
-                        s.push(*start);
-                        s.push('-');
-                        s.push(*end);
+                        f.write_fmt(format_args!("{}-{}", start, end))?;
                     }
                 }
-                s.push(']');
-                s
+                f.write_str("]")
             }
         }
     }
