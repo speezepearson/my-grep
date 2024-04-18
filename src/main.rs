@@ -98,13 +98,9 @@ impl Display for Pattern {
 }
 
 impl FromStr for Pattern {
-    type Err = ();
+    type Err = Vec<chumsky::error::Simple<char>>;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parser = parser();
-        match parser.parse(s) {
-            Ok(result) => Ok(result),
-            Err(_) => Err(()),
-        }
+        parser().parse(s)
     }
 }
 
@@ -655,7 +651,10 @@ mod tests {
 fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simple<char>> {
     use chumsky::prelude::*;
 
-    let u16_pat = text::int(10).map(|s: String| s.parse::<u16>().unwrap());
+    let u16_pat = text::int(10).try_map(|s: String, span| {
+        s.parse::<u16>()
+            .map_err(|e| Simple::custom(span, format!("invalid u16: {}", e)))
+    });
 
     let basic_char = one_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ");
     let range_piece = basic_char
@@ -669,14 +668,17 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
         .map(|(inverted, ranges)| Pattern::Ranges {
             inverted,
             ranges: ranges.iter().map(|(a, b)| (*a, b.unwrap_or(*a))).collect(),
-        });
+        })
+        .labelled("char range");
     let pos_backref = just('\\')
         .ignore_then(u16_pat)
-        .map(Pattern::PositionalBackreference);
+        .map(Pattern::PositionalBackreference)
+        .labelled("positional backreference");
     let named_backref = just("\\g<")
         .ignore_then(basic_char.clone().repeated().at_least(1))
         .then_ignore(just('>'))
-        .map(|name| Pattern::NamedBackreference(name.iter().collect()));
+        .map(|name| Pattern::NamedBackreference(name.iter().collect()))
+        .labelled("named backreference");
     let dot = just('.').to(Pattern::Dot);
 
     recursive(|pat| {
@@ -685,10 +687,11 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
             just("P<")
                 .ignore_then(basic_char.clone().repeated().at_least(1))
                 .then_ignore(just('>'))
-                .map(|name| GroupCapturingness::Named(name.iter().collect())),
+                .map(|name| GroupCapturingness::Named(name.iter().collect()))
+                .labelled("group name"),
         ));
         let group = just('?')
-            .ignore_then(group_opts)
+            .ignore_then(group_opts.clone().labelled("group opts"))
             .or_not()
             .map(|opts| opts.unwrap_or(GroupCapturingness::Positional))
             .then(pat)
@@ -732,7 +735,8 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
                                 .map(|min| (min, None)),
                             u16_pat.clone().map(|n| (n, None)),
                         )))
-                        .then_ignore(just('}')),
+                        .then_ignore(just('}'))
+                        .labelled("repetition limits"),
                 ))
                 .or_not(),
             )
@@ -774,7 +778,7 @@ struct Args {
 
 fn main() -> Result<(), Vec<chumsky::error::Simple<char>>> {
     let args = <Args as clap::Parser>::parse();
-    let pat: Pattern = format!(".*(?:{})", args.input).parse().unwrap();
+    let pat: Pattern = format!(".*(?:{})", args.input).parse::<Pattern>()?;
 
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap();
