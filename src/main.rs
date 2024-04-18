@@ -5,6 +5,7 @@ use std::{
     str::FromStr,
 };
 
+use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::Parser as _;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -778,7 +779,28 @@ struct Args {
 
 fn main() -> Result<(), Vec<chumsky::error::Simple<char>>> {
     let args = <Args as clap::Parser>::parse();
-    let pat: Pattern = format!(".*(?:{})", args.input).parse::<Pattern>()?;
+    let pat: Pattern = match parser()
+        .map_with_span(|c, s| (c, s))
+        .parse(args.input.clone())
+    {
+        Ok((pat, _)) => Pattern::Concat(vec![Pattern::from_str(".*").unwrap(), pat]),
+        Err(errs) => {
+            for err in errs {
+                Report::build(ReportKind::Error, (), err.span().start)
+                    .with_code(3)
+                    .with_message(err.to_string())
+                    .with_label(
+                        Label::new(err.span())
+                            .with_message(format!("{:?}", err.reason()))
+                            .with_color(Color::Red),
+                    )
+                    .finish()
+                    .eprint(Source::from(&args.input))
+                    .unwrap();
+            }
+            std::process::exit(3);
+        }
+    };
 
     for line in std::io::stdin().lock().lines() {
         let line = line.unwrap();
