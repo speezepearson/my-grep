@@ -655,6 +655,8 @@ mod tests {
 fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simple<char>> {
     use chumsky::prelude::*;
 
+    let u16_pat = text::int(10).map(|s: String| s.parse::<u16>().unwrap());
+
     let basic_char = one_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ");
     let range_piece = basic_char
         .clone()
@@ -669,10 +671,8 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
             ranges: ranges.iter().map(|(a, b)| (*a, b.unwrap_or(*a))).collect(),
         });
     let pos_backref = just('\\')
-        .ignore_then(one_of("0123456789").repeated().at_least(1))
-        .map(|cs| {
-            Pattern::PositionalBackreference(cs.into_iter().collect::<String>().parse().unwrap())
-        });
+        .ignore_then(u16_pat)
+        .map(Pattern::PositionalBackreference);
     let named_backref = just("\\g<")
         .ignore_then(basic_char.clone().repeated().at_least(1))
         .then_ignore(just('>'))
@@ -717,23 +717,21 @@ fn parser() -> impl chumsky::Parser<char, Pattern, Error = chumsky::error::Simpl
                     just('+').to((1, None)),
                     just('*').to((0, None)),
                     just('{')
-                        .ignore_then(one_of("0123456789").repeated().map(|cs| {
-                            if cs.is_empty() {
-                                0
-                            } else {
-                                cs.into_iter().collect::<String>().parse().unwrap()
-                                // TODO: error handling
-                            }
-                        }))
-                        .then_ignore(just(','))
-                        .then(one_of("0123456789").repeated().map(|cs| {
-                            if cs.is_empty() {
-                                None
-                            } else {
-                                Some(cs.into_iter().collect::<String>().parse().unwrap())
-                                // TODO: error handling
-                            }
-                        }))
+                        .ignore_then(choice((
+                            just(',')
+                                .ignore_then(u16_pat.clone())
+                                .map(|max| (0, Some(max))),
+                            u16_pat
+                                .clone()
+                                .then_ignore(just(','))
+                                .then(u16_pat)
+                                .map(|(min, max)| (min, Some(max))),
+                            u16_pat
+                                .clone()
+                                .then_ignore(just(','))
+                                .map(|min| (min, None)),
+                            u16_pat.clone().map(|n| (n, None)),
+                        )))
                         .then_ignore(just('}')),
                 ))
                 .or_not(),
